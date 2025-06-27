@@ -181,36 +181,42 @@ class CopyAction(bpy.types.Operator):
                         if Path == "scale":
                             OtherFcurve.keyframe_points.insert(endTL, obj.scale[i])
                         
-                        curIndex = -1
+                        curIndex = -1 #index of key at the endFrame
                         for c in range(len(OtherFcurve.keyframe_points) ): 
                             if OtherFcurve.keyframe_points[c].co[0] == endTL:
                                 curIndex = c
                         bpy.context.scene.frame_set(curTL)  
                         
                         # перенос кадров на начало таймлайна
-                        lenKey = len(OtherFcurve.keyframe_points)
+                        
+                        lenKey = len(OtherFcurve.keyframe_points) #amount of frames before adding new keys
+
                         tempFrame = []
-                        for x in range(curIndex, lenKey ): 
+                        for x in range(curIndex, lenKey ): #x is key index from endFrame
                            tempFrame.append(OtherFcurve.keyframe_points[x])
 
+                        offset = endTL-1
+
                         for x in range(0,len(tempFrame)) :
-                            OtherFcurve.keyframe_points.insert(tempFrame[x].co[0]- endTL + startTL, tempFrame[x].co[1]) 
+                            OtherFcurve.keyframe_points.insert(tempFrame[x].co[0]- offset, tempFrame[x].co[1]) 
                             
                         for x in range(0,len(tempFrame)) :   
                             OtherFcurve.keyframe_points[x].handle_left_type = tempFrame[x].handle_left_type
-                            OtherFcurve.keyframe_points[x].handle_left[0] =  tempFrame[x].handle_left[0]- endTL + startTL 
+                            OtherFcurve.keyframe_points[x].handle_left[0] =  tempFrame[x].handle_left[0] - offset 
                             OtherFcurve.keyframe_points[x].handle_left[1] =  tempFrame[x].handle_left[1] 
                             
                             if x > 0:
                                 OtherFcurve.keyframe_points[x].handle_right_type =  tempFrame[x].handle_right_type
-                                OtherFcurve.keyframe_points[x].handle_right[0] =  tempFrame[x].handle_right[0]- endTL + startTL 
+                                OtherFcurve.keyframe_points[x].handle_right[0] =  tempFrame[x].handle_right[0] - offset 
                                 OtherFcurve.keyframe_points[x].handle_right[1] =  tempFrame[x].handle_right[1] 
 
-                        # удаление кадров после конца цикла    
-                        countFcut = lenKey-curIndex
-                        newEndF = len(OtherFcurve.keyframe_points) - countFcut + 1
+                        # удаление кадров после конца цикла 
+                        
+                        countFcut = lenKey - curIndex #how many keyframes after EndFrame
+                        newEndF = len(OtherFcurve.keyframe_points) - countFcut + 1 #index of keyframe starting from EndFrame
                         for y in range(countFcut -1):  
                             OtherFcurve.keyframe_points.remove(OtherFcurve.keyframe_points[newEndF])
+                        
 
                     else:
                         for m in OtherFcurve.modifiers:
@@ -233,7 +239,7 @@ class CopyAction(bpy.types.Operator):
                                         OtherFcurve.keyframe_points[c].handle_left[1] *=-1
                                         OtherFcurve.keyframe_points[c].handle_right[1]*=-1
                             if OtherFcurve.data_path.endswith("rotation_euler"):
-                                if i == 2:
+                                if i == 2 or i == 1:
                                     for c in range(len(OtherFcurve.keyframe_points)):
                                         OtherFcurve.keyframe_points[c].co[1] *= -1 
                                         OtherFcurve.keyframe_points[c].handle_left[1] *=-1
