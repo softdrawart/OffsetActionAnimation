@@ -25,9 +25,7 @@ class MyParam(bpy.types.PropertyGroup):
     Mirror : bpy.props.BoolProperty(name = "Mirror", default = False, description = "bone animation symmetry x")
 
 def distance_vec(point1: Vector, point2: Vector) -> float:
-    print(point1, point2) 
     return (point2 - point1).length
-
 
 class CopyAction(bpy.types.Operator):
     bl_idname = 'object.offset_action'
@@ -36,56 +34,181 @@ class CopyAction(bpy.types.Operator):
         
     @classmethod
     def poll(cls, context):
+        mode = bpy.context.mode
         props = context.scene.param
         if props.Loc == False and props.Rot == False and props.Sc == False:
             return False
-        if(bpy.context.mode == 'OBJECT'):
+        if(mode == 'OBJECT'):
             if len(context.selected_objects) <= 1:
                 return False 
-        if(bpy.context.mode == 'POSE'):
+        if(mode == 'POSE'):
             if len(context.selected_pose_bones) <= 1:
                 return False
         return True
+    def transfer_fcurve(self, source_fcurve: bpy.types.FCurve, target_fcurve: bpy.types.FCurve, current: bool = False, mirror: bool = False, offset: int = 0, loop: bool = False):
+        """
+        Copy all keyframes and their handles from one FCurve to another.
+
+        Parameters:
+            source_fcurve (FCurve): The curve to copy from.
+            target_fcurve (FCurve): The curve to copy into.
+            current (bool): If True, offset values based on the difference at frame 0.
+            mirror (bool): If True, invert values (Y axis) and handles.
+            offset (int): Frame offset for inserted keys.
+            loop (bool): If True, inserts a loop frame at frame_end+1 and copies it to frame_start.
+        """
+        if source_fcurve is None or target_fcurve is None:
+            print("One of the FCurves is None")
+            return
+
+        scene = bpy.context.scene
+        frame_start = scene.frame_start
+        frame_end = scene.frame_end
+        loop_frame = frame_end + 1
+
+        # Compute value offset if 'current' is enabled
+        delta = 0.0
+        if current:
+            delta = source_fcurve.evaluate(0) - target_fcurve.evaluate(0)
+
+        # Remove existing keyframes in target
+        target_fcurve.keyframe_points.clear()
+
+        # Transfer keyframes
+        for k_src in source_fcurve.keyframe_points:
+            # Compute frame and value
+            frame = k_src.co[0] + offset
+            value = k_src.co[1] - delta if current else k_src.co[1]
+            if mirror:
+                value *= -1
+
+            # Insert keyframe
+            k_new = target_fcurve.keyframe_points.insert(frame, value)
+
+            # Copy handle types
+            k_new.handle_left_type = k_src.handle_left_type
+            k_new.handle_right_type = k_src.handle_right_type
+
+            # Copy and adjust handles
+            h_l_x = k_src.handle_left[0] + offset
+            h_l_y = k_src.handle_left[1] - delta if current else k_src.handle_left[1]
+            h_r_x = k_src.handle_right[0] + offset
+            h_r_y = k_src.handle_right[1] - delta if current else k_src.handle_right[1]
+
+            if mirror:
+                h_l_y *= -1
+                h_r_y *= -1
+
+            k_new.handle_left = (h_l_x, h_l_y)
+            k_new.handle_right = (h_r_x, h_r_y)
+
+        # Handle looping
+        if loop:
+            # Add Cycles modifier if missing
+            if not any(mod.type == 'CYCLES' for mod in target_fcurve.modifiers):
+                target_fcurve.modifiers.new(type='CYCLES')
+
+            # Insert loop keyframe at frame_end + 1
+            loop_val = source_fcurve.evaluate(loop_frame) - delta if current else source_fcurve.evaluate(loop_frame)
+            if mirror:
+                loop_val *= -1
+            loop_k = target_fcurve.keyframe_points.insert(loop_frame, loop_val)
+
+            temp_keys = [
+                {
+                    "frame": kp.co[0],
+                    "value": kp.co[1],
+                    "interp": kp.interpolation,
+                    "hl_type": kp.handle_left_type,
+                    "hr_type": kp.handle_right_type,
+                    "hl": kp.handle_left[:],
+                    "hr": kp.handle_right[:]
+                }
+                for kp in target_fcurve.keyframe_points
+                if kp.co[0] >= loop_frame
+            ]
+            for key in temp_keys:
+                new_frame = key["frame"] - loop_frame + frame_start
+                new_val = key["value"]
+
+                copy_k = target_fcurve.keyframe_points.insert(new_frame, new_val)
+                copy_k.interpolation = key["interp"]
+                copy_k.handle_left_type = key["hl_type"]
+                copy_k.handle_right_type = key["hr_type"]
+                copy_k.handle_left = (key["hl"][0] - loop_frame + frame_start, key["hl"][1])
+                copy_k.handle_right = (key["hr"][0] - loop_frame + frame_start, key["hr"][1])
+
+            # Delete keyframes with frame > loop_frame
+            to_remove_indices = [i for i, kp in enumerate(target_fcurve.keyframe_points) if kp.co[0] > loop_frame]
+
+            # Remove from end to start to avoid shifting indices
+            for i in reversed(to_remove_indices):
+                target_fcurve.keyframe_points.remove(target_fcurve.keyframe_points[i])
+
+        # Ensure the FCurve updates
+        target_fcurve.update()
+        bpy.context.view_layer.update()
+        for area in bpy.context.screen.areas:
+            if area.type in {'GRAPH_EDITOR', 'DOPESHEET_EDITOR'}:
+                area.tag_redraw()
+
+    def copyChannels(self, OtherObj, CurObj, Path: str, rangeLoop: int, LocalOffset: int, Mirror = False, Current = False, Loop = False):
+        # вставка первого кадра для получения каналов
+        mode = self.mode
+
+        if(mode == 'OBJECT'):
+            if OtherObj.animation_data is None or OtherObj.animation_data.action is None:
+                OtherObj.animation_data_create()
+                newAction = bpy.data.actions.new(f"{OtherObj.name}_OffsetAction")
+                OtherObj.animation_data.action = newAction               
+        OtherObj.keyframe_insert(data_path = Path, frame = 0, group= f"{OtherObj.name}")
         
-    def action(self,context):     
+        for i in range(rangeLoop): # XYZ or WXYZ
+            CurFcurve = None
+            OtherFcurve = None 
+            if(mode == 'OBJECT'):
+                CurFcurve = CurObj.animation_data.action.fcurves.find(data_path = Path, index = i)       
+                OtherFcurve = OtherObj.animation_data.action.fcurves.find(data_path = Path, index = i)                        
+            if(mode == 'POSE'):
+                CurArmat = CurObj.id_data #gets bone Armature object
+                CurFcurve = CurArmat.animation_data.action.fcurves.find(data_path = f'pose.bones["{CurObj.name}"].{Path}', index = i)
+                OtherFcurve = CurArmat.animation_data.action.fcurves.find(data_path = f'pose.bones["{OtherObj.name}"].{Path}', index = i) 
+            if CurFcurve == None:
+                continue
+            OtherFValue = OtherFcurve.evaluate(0)       
+            CurFValue = CurFcurve.evaluate(0)
+
+            # remove all keyframes from otherFcurve
+            for p in range(len(OtherFcurve.keyframe_points) ):  
+                OtherFcurve.keyframe_points.remove(OtherFcurve.keyframe_points[0])
+
+            # add all keyframes of current channel to other channel
+            self.transfer_fcurve(CurFcurve, OtherFcurve, current=Current, mirror=(Mirror if i in (1,2) else False), offset=LocalOffset, loop=Loop)
+
+    def execute(self, context):
         props = context.scene.param
-        CurObj = None           
-        if(bpy.context.mode == 'OBJECT'):
+        CurObj = None
+        self.mode = mode = bpy.context.mode
+
+        if(mode == 'OBJECT'):
             CurObj = bpy.context.active_object
-        if(bpy.context.mode == 'POSE'):
+            SelectedObj = [o for o in bpy.context.selected_objects if not (o == CurObj)]
+        if(mode == 'POSE'):
             CurArmat = bpy.context.active_object
             CurObj = bpy.context.active_object.pose.bones[bpy.context.active_bone.name]
-            GlobalCurPos = CurArmat.matrix_world @ CurObj.matrix @ CurObj.location      
-        RangeLRS =[0]*3
-        LRS = [props.Loc, props.Rot, props.Sc ]
-        match LRS:
-            case [True,False,False]:
-                RangeLRS = [0,1,1]
-            case [False,True,False]:
-                RangeLRS = [1,2,1]
-            case [False,False,True]:
-                RangeLRS = [2,3,1]
-            case [True,True,True]:
-                RangeLRS = [0,3,1]
-            case [True,True,False]:
-                RangeLRS = [0,2,1]
-            case [False,True,True]:
-                RangeLRS = [1,3,1]
-            case [True,False,True]:
-                RangeLRS = [0,3,2]
-            case _:
-                print("loh")
+            GlobalCurPos = CurArmat.matrix_world @ CurObj.matrix @ CurObj.location
+            SelectedObj = [b for b in bpy.context.selected_pose_bones if not (b.name == bpy.context.active_bone.name)]    
+        
+        #RangeLRS = self.findLRS(context)
+        if not CurObj or not SelectedObj:
+            print("error")
+            return {'CANCELLED'}
 
-        SelectedObj = []
-        if(bpy.context.mode == 'OBJECT'):
-            SelectedObj = [o for o in bpy.context.selected_objects if not (o == CurObj)]
-        if(bpy.context.mode == 'POSE'):
-            SelectedObj = [b for b in bpy.context.selected_pose_bones if not (b.name == bpy.context.active_bone.name)]
         DistObj = []
         for obj in SelectedObj:
-            if(bpy.context.mode == 'OBJECT'):
-                dist = distance_vec(obj.location, CurObj.location) #тут
-            if(bpy.context.mode == 'POSE'):
+            if(mode == 'OBJECT'):
+                dist = distance_vec(obj.location, CurObj.location)
+            if(mode == 'POSE'):
                 globalObj = CurArmat.matrix_world @ obj.matrix @ obj.location
                 dist = distance_vec(globalObj, GlobalCurPos) 
             DistObj.append(dist)
@@ -96,158 +219,30 @@ class CopyAction(bpy.types.Operator):
 
         LocalOffset = 0
         Path: str
+        #run through selected objects or bones copy keys 
         for obj in SortObj.keys():  
             LocalOffset += props.OffsetFrame
             OtherObj = obj
-            for a in range(RangeLRS[0],RangeLRS[1],RangeLRS[2]):
+            rangeLoop = 3 #default 3 channels XYZ
+
+            if props.Loc:
                 rangeLoop = 3
-                
-                if a == 0:
-                    Path = "location"
-                if a == 1:
-                    if(bpy.context.mode == 'OBJECT'):
-                        if CurObj.rotation_mode in ['XYZ', 'XZY', 'YXZ', 'ZXY', 'YZX']:
-                            Path = "rotation_euler"
-                        else:
-                            rangeLoop = 4
-                            Path = "rotation_quaternion"
-                    if(bpy.context.mode == 'POSE'):
-                        if CurObj.rotation_mode in ['XYZ', 'XZY', 'YXZ', 'ZXY', 'YZX']:
-                            Path = "rotation_euler"
-                        else:
-                            rangeLoop = 4
-                            Path = "rotation_quaternion"
-                if a == 2:
-                        Path = "scale"
-
-                # вставка первого кадра для получения каналов
-                if(bpy.context.mode == 'OBJECT'):
-                    if OtherObj.animation_data is None or OtherObj.animation_data.action is None:
-                        OtherObj.animation_data_create()
-                        newAction = bpy.data.actions.new(f"{OtherObj.name}_OffsetAction")
-                        OtherObj.animation_data.action = newAction               
-                OtherObj.keyframe_insert(data_path = Path, frame = 0, group= f"{OtherObj.name}")
-                
-                for i in range(rangeLoop): # XYZ or WXYZ
-                    
-                    CurFcurve = None
-                    OtherFcurve = None 
-                    if(bpy.context.mode == 'OBJECT'):
-                        CurFcurve = CurObj.animation_data.action.fcurves.find(data_path = Path, index = i)       
-                        OtherFcurve = OtherObj.animation_data.action.fcurves.find(data_path = Path, index = i)                        
-                    if(bpy.context.mode == 'POSE'):
-                        CurFcurve = CurArmat.animation_data.action.fcurves.find(data_path = f'pose.bones["{CurObj.name}"].{Path}', index = i)
-                        OtherFcurve = CurArmat.animation_data.action.fcurves.find(data_path = f'pose.bones["{OtherObj.name}"].{Path}', index = i) 
-                    if CurFcurve == None:
-                        continue
-                    OtherFValue = OtherFcurve.evaluate(0)       
-                    CurFValue = CurFcurve.evaluate(0)
-
-                    # удаление кейфрэймов
-                    for p in range(len(OtherFcurve.keyframe_points) ):  
-                        OtherFcurve.keyframe_points.remove(OtherFcurve.keyframe_points[0])
-
-                    # вставка кейфрэймов 
-                    for k in CurFcurve.keyframe_points : 
-                        if props.Current:
-                            OtherFcurve.keyframe_points.insert(k.co[0] + LocalOffset,  k.co[1] - ( CurFValue - OtherFValue) )
-                        else:
-                            OtherFcurve.keyframe_points.insert(k.co[0] + LocalOffset,  k.co[1] ) 
-                        
-                    # перенос хэндлеров                    
-                    for k in range(len(OtherFcurve.keyframe_points) ):
-                        OtherFcurve.keyframe_points[k].handle_left_type = CurFcurve.keyframe_points[k].handle_left_type
-                        OtherFcurve.keyframe_points[k].handle_left[0] =  CurFcurve.keyframe_points[k].handle_left[0] + LocalOffset 
-                        OtherFcurve.keyframe_points[k].handle_left[1] =  CurFcurve.keyframe_points[k].handle_left[1] - (CurFcurve.keyframe_points[k].co[1]- OtherFcurve.keyframe_points[k].co[1])
-                        OtherFcurve.keyframe_points[k].handle_right_type =  CurFcurve.keyframe_points[k].handle_right_type
-                        OtherFcurve.keyframe_points[k].handle_right[0] =  CurFcurve.keyframe_points[k].handle_right[0] + LocalOffset
-                        OtherFcurve.keyframe_points[k].handle_right[1] =  CurFcurve.keyframe_points[k].handle_right[1] - (CurFcurve.keyframe_points[k].co[1]- OtherFcurve.keyframe_points[k].co[1]) 
-                        
-
-                    # вставка кадра в конец цикла если нужен цикл
-                    if props.Loop == True: 
-                        endTL = bpy.context.scene.frame_end+1 
-                        startTL = bpy.context.scene.frame_start 
-                        curTL = bpy.context.scene.frame_current
-                        
-                        OtherFcurve.modifiers.new(type='CYCLES')
-                        bpy.context.scene.frame_set(endTL)
-                        if Path == "location":
-                            OtherFcurve.keyframe_points.insert(endTL, obj.location[i])
-                        if Path == "rotation_euler":
-                            OtherFcurve.keyframe_points.insert(endTL, obj.rotation_euler[i])
-                        if Path == "rotation_quaternion":
-                            OtherFcurve.keyframe_points.insert(endTL, obj.rotation_quaternion[i])
-                        if Path == "scale":
-                            OtherFcurve.keyframe_points.insert(endTL, obj.scale[i])
-                        
-                        curIndex = -1 #index of key at the endFrame
-                        for c in range(len(OtherFcurve.keyframe_points) ): 
-                            if OtherFcurve.keyframe_points[c].co[0] == endTL:
-                                curIndex = c
-                        bpy.context.scene.frame_set(curTL)  
-                        
-                        # перенос кадров на начало таймлайна
-                        
-                        lenKey = len(OtherFcurve.keyframe_points) #amount of frames before adding new keys
-
-                        tempFrame = []
-                        for x in range(curIndex, lenKey ): #x is key index from endFrame
-                           tempFrame.append(OtherFcurve.keyframe_points[x])
-
-                        offset = endTL-1
-
-                        for x in range(0,len(tempFrame)) :
-                            OtherFcurve.keyframe_points.insert(tempFrame[x].co[0]- offset, tempFrame[x].co[1]) 
-                            
-                        for x in range(0,len(tempFrame)) :   
-                            OtherFcurve.keyframe_points[x].handle_left_type = tempFrame[x].handle_left_type
-                            OtherFcurve.keyframe_points[x].handle_left[0] =  tempFrame[x].handle_left[0] - offset 
-                            OtherFcurve.keyframe_points[x].handle_left[1] =  tempFrame[x].handle_left[1] 
-                            
-                            if x > 0:
-                                OtherFcurve.keyframe_points[x].handle_right_type =  tempFrame[x].handle_right_type
-                                OtherFcurve.keyframe_points[x].handle_right[0] =  tempFrame[x].handle_right[0] - offset 
-                                OtherFcurve.keyframe_points[x].handle_right[1] =  tempFrame[x].handle_right[1] 
-
-                        # удаление кадров после конца цикла 
-                        
-                        countFcut = lenKey - curIndex #how many keyframes after EndFrame
-                        newEndF = len(OtherFcurve.keyframe_points) - countFcut + 1 #index of keyframe starting from EndFrame
-                        for y in range(countFcut -1):  
-                            OtherFcurve.keyframe_points.remove(OtherFcurve.keyframe_points[newEndF])
-                        
-
-                    else:
-                        for m in OtherFcurve.modifiers:
-                            if (m.type == 'CYCLES'): 
-                                OtherFcurve.modifiers.remove(m)
-                    
-                    # Симметрия анимации по иксу если нужно
-                    if props.Mirror == True: 
-                        if(bpy.context.mode == 'POSE'):
-                            if OtherFcurve.data_path.endswith("location") and i == 0 :
-                                for c in range(len(OtherFcurve.keyframe_points)):
-                                    OtherFcurve.keyframe_points[c].co[1] *= -1
-                                    OtherFcurve.keyframe_points[c].handle_left[1] *=-1
-                                    OtherFcurve.keyframe_points[c].handle_right[1]*=-1
-                                        
-                            if OtherFcurve.data_path.endswith("rotation_quaternion"):
-                                if i == 2 or i == 3:
-                                    for c in range(len(OtherFcurve.keyframe_points)):
-                                        OtherFcurve.keyframe_points[c].co[1] *= -1 
-                                        OtherFcurve.keyframe_points[c].handle_left[1] *=-1
-                                        OtherFcurve.keyframe_points[c].handle_right[1]*=-1
-                            if OtherFcurve.data_path.endswith("rotation_euler"):
-                                if i == 2 or i == 1:
-                                    for c in range(len(OtherFcurve.keyframe_points)):
-                                        OtherFcurve.keyframe_points[c].co[1] *= -1 
-                                        OtherFcurve.keyframe_points[c].handle_left[1] *=-1
-                                        OtherFcurve.keyframe_points[c].handle_right[1]*=-1
-    
-    def execute(self,context)-> set:
-        self.action(context)
-        return{'FINISHED'}                    
+                Path = "location"
+                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, props.Mirror, props.Current, props.Loop)
+            if props.Rot:
+                if CurObj.rotation_mode in ['XYZ', 'XZY', 'YXZ', 'ZXY', 'YZX']:
+                    rangeLoop = 3
+                    Path = "rotation_euler"
+                else:
+                    rangeLoop = 4
+                    Path = "rotation_quaternion"
+                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, props.Mirror, props.Current, props.Loop)
+            if props.Sc:
+                rangeLoop = 3
+                Path = "scale"
+                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, props.Mirror, props.Current, props.Loop)
+            
+            return{'FINISHED'}                    
 
 class UIPanel(bpy.types.Panel):
     bl_label = "Action Animation"
