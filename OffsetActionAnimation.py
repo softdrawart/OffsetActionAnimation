@@ -36,7 +36,7 @@ class CopyAction(bpy.types.Operator):
         
     @classmethod
     def poll(cls, context):
-        props = context.object.param
+        props = context.scene.param
         if props.Loc == False and props.Rot == False and props.Sc == False:
             return False
         if(bpy.context.mode == 'OBJECT'):
@@ -48,14 +48,13 @@ class CopyAction(bpy.types.Operator):
         return True
         
     def action(self,context):     
-        props = context.object.param
+        props = context.scene.param
         CurObj = None           
         if(bpy.context.mode == 'OBJECT'):
             CurObj = bpy.context.active_object
         if(bpy.context.mode == 'POSE'):
             CurArmat = bpy.context.active_object
-            activBone = bpy.context.active_bone
-            CurObj = bpy.context.active_object.pose.bones[activBone.name]
+            CurObj = bpy.context.active_object.pose.bones[bpy.context.active_bone.name]
             GlobalCurPos = CurArmat.matrix_world @ CurObj.matrix @ CurObj.location      
         RangeLRS =[0]*3
         LRS = [props.Loc, props.Rot, props.Sc ]
@@ -107,10 +106,17 @@ class CopyAction(bpy.types.Operator):
                     Path = "location"
                 if a == 1:
                     if(bpy.context.mode == 'OBJECT'):
-                        Path = "rotation_euler"
+                        if CurObj.rotation_mode in ['XYZ', 'XZY', 'YXZ', 'ZXY', 'YZX']:
+                            Path = "rotation_euler"
+                        else:
+                            rangeLoop = 4
+                            Path = "rotation_quaternion"
                     if(bpy.context.mode == 'POSE'):
-                        rangeLoop = 4
-                        Path = "rotation_quaternion"
+                        if CurObj.rotation_mode in ['XYZ', 'XZY', 'YXZ', 'ZXY', 'YZX']:
+                            Path = "rotation_euler"
+                        else:
+                            rangeLoop = 4
+                            Path = "rotation_quaternion"
                 if a == 2:
                         Path = "scale"
 
@@ -226,6 +232,12 @@ class CopyAction(bpy.types.Operator):
                                         OtherFcurve.keyframe_points[c].co[1] *= -1 
                                         OtherFcurve.keyframe_points[c].handle_left[1] *=-1
                                         OtherFcurve.keyframe_points[c].handle_right[1]*=-1
+                            if OtherFcurve.data_path.endswith("rotation_euler"):
+                                if i == 2:
+                                    for c in range(len(OtherFcurve.keyframe_points)):
+                                        OtherFcurve.keyframe_points[c].co[1] *= -1 
+                                        OtherFcurve.keyframe_points[c].handle_left[1] *=-1
+                                        OtherFcurve.keyframe_points[c].handle_right[1]*=-1
     
     def execute(self,context)-> set:
         self.action(context)
@@ -242,7 +254,7 @@ class UIPanel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         sc = context.scene
-        props = context.object.param
+        props = context.scene.param
         col = layout.column(align=False)
         col.prop( props, "OffsetFrame")
         ro2 = col.row( align = True)
@@ -262,13 +274,13 @@ def register():
     bpy.utils.register_class(MyParam)
     bpy.utils.register_class(UIPanel)
     bpy.utils.register_class(CopyAction)
-    bpy.types.Object.param = bpy.props.PointerProperty(type = MyParam)
+    bpy.types.Scene.param = bpy.props.PointerProperty(type = MyParam)
     
 def unregister():
     bpy.utils.unregister_class(UIPanel)
     bpy.utils.unregister_class(CopyAction)
     bpy.utils.unregister_class(MyParam)
-    del bpy.types.Object.param
+    del bpy.types.Scene.param
 
 
 if __name__ == "__main__":
