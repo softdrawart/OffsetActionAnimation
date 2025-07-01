@@ -109,10 +109,12 @@ class CopyAction(bpy.types.Operator):
                 target_fcurve.modifiers.new(type='CYCLES')
 
             # Insert loop keyframe at frame_end + 1
-            loop_val = source_fcurve.evaluate(loop_frame) - delta if current else source_fcurve.evaluate(loop_frame)
-            if mirror:
-                loop_val *= -1
-            loop_k = target_fcurve.keyframe_points.insert(loop_frame, loop_val)
+            #loop_val = source_fcurve.evaluate(loop_frame) - delta if current else source_fcurve.evaluate(loop_frame)
+            #if mirror:
+            #    loop_val *= -1
+            #loop_k = target_fcurve.keyframe_points.insert(loop_frame, loop_val)
+            loop_val = target_fcurve.evaluate(loop_frame)
+            target_fcurve.keyframe_points.insert(loop_frame, loop_val)
 
             temp_keys = [
                 {
@@ -152,8 +154,8 @@ class CopyAction(bpy.types.Operator):
             if area.type in {'GRAPH_EDITOR', 'DOPESHEET_EDITOR'}:
                 area.tag_redraw()
 
-    def copyChannels(self, OtherObj, CurObj, Path: str, rangeLoop: int, LocalOffset: int, Mirror = False, Current = False, Loop = False):
-        # вставка первого кадра для получения каналов
+    def copyChannels(self, OtherObj, CurObj, Path: str, rangeLoop: int, LocalOffset: int, Mirror = '', Current = False, Loop = False):
+        # copy fcurves of specified path from current to other object
         mode = self.mode
 
         if(mode == 'OBJECT'):
@@ -183,7 +185,8 @@ class CopyAction(bpy.types.Operator):
                 OtherFcurve.keyframe_points.remove(OtherFcurve.keyframe_points[0])
 
             # add all keyframes of current channel to other channel
-            self.transfer_fcurve(CurFcurve, OtherFcurve, current=Current, mirror=(Mirror if i in (1,2) else False), offset=LocalOffset, loop=Loop)
+            indices = [i for i, c in enumerate('XYZ') if c in Mirror]
+            self.transfer_fcurve(CurFcurve, OtherFcurve, current=Current, mirror=(Mirror if i in indices else False), offset=LocalOffset, loop=Loop)
 
     def execute(self, context):
         props = context.scene.param
@@ -225,10 +228,11 @@ class CopyAction(bpy.types.Operator):
             OtherObj = obj
             rangeLoop = 3 #default 3 channels XYZ
 
+            #define wich path to copy
             if props.Loc:
                 rangeLoop = 3
                 Path = "location"
-                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, props.Mirror, props.Current, props.Loop)
+                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, Mirror='X' if props.Mirror else '', Current=props.Current, Loop=props.Loop)
             if props.Rot:
                 if CurObj.rotation_mode in ['XYZ', 'XZY', 'YXZ', 'ZXY', 'YZX']:
                     rangeLoop = 3
@@ -236,11 +240,11 @@ class CopyAction(bpy.types.Operator):
                 else:
                     rangeLoop = 4
                     Path = "rotation_quaternion"
-                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, props.Mirror, props.Current, props.Loop)
+                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, Mirror='YZ' if props.Mirror else '', Current=props.Current, Loop=props.Loop)
             if props.Sc:
                 rangeLoop = 3
                 Path = "scale"
-                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, props.Mirror, props.Current, props.Loop)
+                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, Mirror='', Current=props.Current, Loop=props.Loop)
             
             return{'FINISHED'}                    
 
