@@ -1,8 +1,8 @@
 bl_info = {
     "name": "Action Animation",
     "author": "Egor Ilyin",
-    "version": (1, 0, 0),
-    "blender": (3, 4, 1),
+    "version": (1, 1, 0),
+    "blender": (4, 2, 9),
     "location": "VIEW 3D > UI",
     "description": "copy animation to other objects",
     "doc_url": "",
@@ -185,7 +185,12 @@ class CopyAction(bpy.types.Operator):
                 OtherFcurve.keyframe_points.remove(OtherFcurve.keyframe_points[0])
 
             # add all keyframes of current channel to other channel
-            indices = [i for i, c in enumerate('XYZ') if c in Mirror]
+            indices = []
+            match rangeLoop:
+                case 3:
+                    indices = [i for i, c in enumerate('XYZ') if c in Mirror]
+                case 4:
+                    indices = [i for i, c in enumerate('WXYZ') if c in Mirror]
             self.transfer_fcurve(CurFcurve, OtherFcurve, current=Current, mirror=(Mirror if i in indices else False), offset=LocalOffset, loop=Loop)
 
     def execute(self, context):
