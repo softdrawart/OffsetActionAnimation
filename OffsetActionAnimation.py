@@ -1,20 +1,18 @@
+import bpy
+from mathutils import Vector
+import mathutils
+
 bl_info = {
     "name": "Action Animation",
     "author": "Egor Ilyin",
-    "version": (1, 1, 0),
-    "blender": (4, 2, 9),
+    "version": (1, 0, 0),
+    "blender": (3, 4, 1),
     "location": "VIEW 3D > UI",
     "description": "copy animation to other objects",
     "doc_url": "",
     "category": "Animation",
 }
 
-
-import bpy
-from mathutils import Vector
-import mathutils
-
-            
 class MyParam(bpy.types.PropertyGroup):
     OffsetFrame : bpy.props.IntProperty(name = "Offset Frame", default = 1, description = "Offset of copied keyframes")
     Loc : bpy.props.BoolProperty(name = "Loc", default = True, description = "Location chanels")
@@ -22,7 +20,16 @@ class MyParam(bpy.types.PropertyGroup):
     Sc : bpy.props.BoolProperty(name = "Sc", default = True, description = "Scale chanels")
     Loop : bpy.props.BoolProperty(name = "Loop", default = False, description = "loop animation after end keyframe")
     Current : bpy.props.BoolProperty(name = "Current", default = False, description = "copy keyframes at current coordinates")
-    Mirror : bpy.props.BoolProperty(name = "Mirror", default = False, description = "bone animation symmetry x")
+    
+    # Mirror options for Location
+    MirrorLocX : bpy.props.BoolProperty(name="X", default=False, description="Mirror Location X-axis")
+    MirrorLocY : bpy.props.BoolProperty(name="Y", default=False, description="Mirror Location Y-axis")
+    MirrorLocZ : bpy.props.BoolProperty(name="Z", default=False, description="Mirror Location Z-axis")
+
+    # Mirror options for Rotation
+    MirrorRotX : bpy.props.BoolProperty(name="X", default=False, description="Mirror Rotation X-axis")
+    MirrorRotY : bpy.props.BoolProperty(name="Y", default=False, description="Mirror Rotation Y-axis")
+    MirrorRotZ : bpy.props.BoolProperty(name="Z", default=False, description="Mirror Rotation Z-axis")
 
 def distance_vec(point1: Vector, point2: Vector) -> float:
     return (point2 - point1).length
@@ -45,7 +52,8 @@ class CopyAction(bpy.types.Operator):
             if len(context.selected_pose_bones) <= 1:
                 return False
         return True
-    def transfer_fcurve(self, source_fcurve: bpy.types.FCurve, target_fcurve: bpy.types.FCurve, current: bool = False, mirror: bool = False, offset: int = 0, loop: bool = False):
+
+    def transfer_fcurve(self, source_fcurve: bpy.types.FCurve, target_fcurve: bpy.types.FCurve, current: bool = False, mirror_axis: bool = False, offset: int = 0, loop: bool = False):
         """
         Copy all keyframes and their handles from one FCurve to another.
 
@@ -53,7 +61,7 @@ class CopyAction(bpy.types.Operator):
             source_fcurve (FCurve): The curve to copy from.
             target_fcurve (FCurve): The curve to copy into.
             current (bool): If True, offset values based on the difference at frame 0.
-            mirror (bool): If True, invert values (Y axis) and handles.
+            mirror_axis (bool): If True, invert values (Y axis) and handles for the specific channel.
             offset (int): Frame offset for inserted keys.
             loop (bool): If True, inserts a loop frame at frame_end+1 and copies it to frame_start.
         """
@@ -79,7 +87,7 @@ class CopyAction(bpy.types.Operator):
             # Compute frame and value
             frame = k_src.co[0] + offset
             value = k_src.co[1] - delta if current else k_src.co[1]
-            if mirror:
+            if mirror_axis:
                 value *= -1
 
             # Insert keyframe
@@ -95,7 +103,7 @@ class CopyAction(bpy.types.Operator):
             h_r_x = k_src.handle_right[0] + offset
             h_r_y = k_src.handle_right[1] - delta if current else k_src.handle_right[1]
 
-            if mirror:
+            if mirror_axis:
                 h_l_y *= -1
                 h_r_y *= -1
 
@@ -108,11 +116,6 @@ class CopyAction(bpy.types.Operator):
             if not any(mod.type == 'CYCLES' for mod in target_fcurve.modifiers):
                 target_fcurve.modifiers.new(type='CYCLES')
 
-            # Insert loop keyframe at frame_end + 1
-            #loop_val = source_fcurve.evaluate(loop_frame) - delta if current else source_fcurve.evaluate(loop_frame)
-            #if mirror:
-            #    loop_val *= -1
-            #loop_k = target_fcurve.keyframe_points.insert(loop_frame, loop_val)
             loop_val = target_fcurve.evaluate(loop_frame)
             target_fcurve.keyframe_points.insert(loop_frame, loop_val)
 
@@ -154,7 +157,7 @@ class CopyAction(bpy.types.Operator):
             if area.type in {'GRAPH_EDITOR', 'DOPESHEET_EDITOR'}:
                 area.tag_redraw()
 
-    def copyChannels(self, OtherObj, CurObj, Path: str, rangeLoop: int, LocalOffset: int, Mirror = '', Current = False, Loop = False):
+    def copyChannels(self, OtherObj, CurObj, Path: str, rangeLoop: int, LocalOffset: int, mirror_settings: list, Current: bool = False, Loop: bool = False):
         # copy fcurves of specified path from current to other object
         mode = self.mode
 
@@ -177,6 +180,10 @@ class CopyAction(bpy.types.Operator):
                 OtherFcurve = CurArmat.animation_data.action.fcurves.find(data_path = f'pose.bones["{OtherObj.name}"].{Path}', index = i) 
             if CurFcurve == None:
                 continue
+            
+            # Determine if this specific channel should be mirrored
+            should_mirror = mirror_settings[i] if i < len(mirror_settings) else False
+
             OtherFValue = OtherFcurve.evaluate(0)       
             CurFValue = CurFcurve.evaluate(0)
 
@@ -185,13 +192,7 @@ class CopyAction(bpy.types.Operator):
                 OtherFcurve.keyframe_points.remove(OtherFcurve.keyframe_points[0])
 
             # add all keyframes of current channel to other channel
-            indices = []
-            match rangeLoop:
-                case 3:
-                    indices = [i for i, c in enumerate('XYZ') if c in Mirror]
-                case 4:
-                    indices = [i for i, c in enumerate('WXYZ') if c in Mirror]
-            self.transfer_fcurve(CurFcurve, OtherFcurve, current=Current, mirror=(Mirror if i in indices else False), offset=LocalOffset, loop=Loop)
+            self.transfer_fcurve(CurFcurve, OtherFcurve, current=Current, mirror_axis=should_mirror, offset=LocalOffset, loop=Loop)
 
     def execute(self, context):
         props = context.scene.param
@@ -207,7 +208,6 @@ class CopyAction(bpy.types.Operator):
             GlobalCurPos = CurArmat.matrix_world @ CurObj.matrix @ CurObj.location
             SelectedObj = [b for b in bpy.context.selected_pose_bones if not (b.name == bpy.context.active_bone.name)]    
         
-        #RangeLRS = self.findLRS(context)
         if not CurObj or not SelectedObj:
             print("error")
             return {'CANCELLED'}
@@ -227,29 +227,46 @@ class CopyAction(bpy.types.Operator):
 
         LocalOffset = 0
         Path: str
+        
         #run through selected objects or bones copy keys 
         for obj in SortObj.keys():  
             LocalOffset += props.OffsetFrame
             OtherObj = obj
-            rangeLoop = 3 #default 3 channels XYZ
+            
+            # Define mirror settings for each type of transform
+            mirror_loc_settings = [props.MirrorLocX, props.MirrorLocY, props.MirrorLocZ]
+            mirror_rot_settings = [props.MirrorRotX, props.MirrorRotY, props.MirrorRotZ, False] # Quaternion WXYZ, W is not mirrored
 
-            #define wich path to copy
+            #define which path to copy
             if props.Loc:
                 rangeLoop = 3
                 Path = "location"
-                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, Mirror='X' if props.Mirror else '', Current=props.Current, Loop=props.Loop)
+                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, 
+                                  mirror_settings=mirror_loc_settings, 
+                                  Current=props.Current, Loop=props.Loop)
             if props.Rot:
                 if CurObj.rotation_mode in ['XYZ', 'XZY', 'YXZ', 'ZXY', 'YZX']:
                     rangeLoop = 3
                     Path = "rotation_euler"
-                else:
+                    # For Euler, mirror settings match the 3 axes directly
+                    self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, 
+                                      mirror_settings=mirror_rot_settings[:3], 
+                                      Current=props.Current, Loop=props.Loop)
+                else: # Quaternion
                     rangeLoop = 4
                     Path = "rotation_quaternion"
-                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, Mirror='YZ' if props.Mirror else '', Current=props.Current, Loop=props.Loop)
+                    # For Quaternion, WXYZ. W (index 0) is typically not mirrored, then X, Y, Z
+                    # We pass the full mirror_rot_settings, assuming W is handled as False
+                    self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, 
+                                      mirror_settings=mirror_rot_settings, 
+                                      Current=props.Current, Loop=props.Loop)
             if props.Sc:
                 rangeLoop = 3
                 Path = "scale"
-                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, Mirror='', Current=props.Current, Loop=props.Loop)
+                # Scale is generally not mirrored, so pass a list of False
+                self.copyChannels(OtherObj, CurObj, Path, rangeLoop, LocalOffset, 
+                                  mirror_settings=[False, False, False], 
+                                  Current=props.Current, Loop=props.Loop)
             
             return{'FINISHED'}                    
 
@@ -258,25 +275,43 @@ class UIPanel(bpy.types.Panel):
     bl_idname = "OBJECT_PT_TestPanel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-#    bl_context = "object"
     bl_category = "Animation"
 
     def draw(self, context):
         layout = self.layout
-        sc = context.scene
         props = context.scene.param
-        col = layout.column(align=False)
-        col.prop( props, "OffsetFrame")
-        ro2 = col.row( align = True)
-        ro2.prop( props, "Loop")
-        ro2.prop(props, "Current")
-        ro2.prop(props, "Mirror") 
-        box1 = col.box()
-        ro = box1.row ( align = True)
         
-        ro.prop( props, "Loc")
-        ro.prop( props, "Rot")
-        ro.prop( props, "Sc")
+        col = layout.column(align=False)
+        col.prop(props, "OffsetFrame")
+        
+        row_options = col.row(align=True)
+        row_options.prop(props, "Loop")
+        row_options.prop(props, "Current")
+        
+        box1 = col.box()
+        row_channels = box1.row(align=True)
+        row_channels.prop(props, "Loc")
+        row_channels.prop(props, "Rot")
+        row_channels.prop(props, "Sc")
+
+        # Location Mirroring Options
+        if props.Loc:
+            box_loc_mirror = col.box()
+            box_loc_mirror.label(text="Mirror Location:")
+            row_loc_mirror = box_loc_mirror.row(align=True)
+            row_loc_mirror.prop(props, "MirrorLocX")
+            row_loc_mirror.prop(props, "MirrorLocY")
+            row_loc_mirror.prop(props, "MirrorLocZ")
+
+        # Rotation Mirroring Options
+        if props.Rot:
+            box_rot_mirror = col.box()
+            box_rot_mirror.label(text="Mirror Rotation:")
+            row_rot_mirror = box_rot_mirror.row(align=True)
+            row_rot_mirror.prop(props, "MirrorRotX")
+            row_rot_mirror.prop(props, "MirrorRotY")
+            row_rot_mirror.prop(props, "MirrorRotZ")
+        
         col1 = layout.row()
         col1.operator("object.offset_action")
 
@@ -294,4 +329,4 @@ def unregister():
 
 
 if __name__ == "__main__":
-    register()        
+    register()
